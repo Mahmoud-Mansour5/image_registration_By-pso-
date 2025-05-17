@@ -215,6 +215,7 @@ class MainWindow(QMainWindow):
         self.target_images = []    # Will store distorted images
         self.current_index = 0
         self.results = []
+        self.processing_mode = None  # 'single' or 'pair'
         
         # Create main widget and layout
         main_widget = QWidget()
@@ -228,7 +229,7 @@ class MainWindow(QMainWindow):
         
         # Apply styling
         self.apply_styling()
-        
+
     def create_toolbar(self, layout):
         """Create the application toolbar"""
         toolbar = QHBoxLayout()
@@ -286,16 +287,18 @@ class MainWindow(QMainWindow):
         pso_group = QGroupBox("PSO Parameters")
         pso_layout = QGridLayout()
         
-        # Add parameter controls
+        # Add parameter controls with wider ranges
         self.n_particles = QSpinBox()
-        self.n_particles.setRange(50, 200)
+        self.n_particles.setRange(10, 500)  # Increased range
         self.n_particles.setValue(100)
+        self.n_particles.setToolTip("Number of particles (solutions) to use in optimization.\nMore particles = better accuracy but slower processing")
         pso_layout.addWidget(QLabel("Particles:"), 0, 0)
         pso_layout.addWidget(self.n_particles, 0, 1)
         
         self.n_iterations = QSpinBox()
-        self.n_iterations.setRange(20, 100)
+        self.n_iterations.setRange(10, 200)  # Increased range
         self.n_iterations.setValue(50)
+        self.n_iterations.setToolTip("Number of iterations for optimization.\nMore iterations = better results but longer processing time")
         pso_layout.addWidget(QLabel("Iterations:"), 1, 0)
         pso_layout.addWidget(self.n_iterations, 1, 1)
         
@@ -327,11 +330,26 @@ class MainWindow(QMainWindow):
             'mi': QLabel("MI: -")
         }
         
+        # Add tooltips for metrics
+        self.metrics_labels['ssim'].setToolTip("Structural Similarity Index\n1.0 means perfect match")
+        self.metrics_labels['ncc'].setToolTip("Normalized Cross-Correlation\n1.0 means perfect match")
+        self.metrics_labels['mse'].setToolTip("Mean Squared Error\nLower values indicate better match")
+        self.metrics_labels['mi'].setToolTip("Mutual Information\nHigher values indicate better match")
+        
         for label in self.metrics_labels.values():
             metrics_layout.addWidget(label)
             
         metrics_group.setLayout(metrics_layout)
         settings_layout.addWidget(metrics_group)
+        
+        # Batch Processing Status
+        if len(self.original_images) > 1:
+            batch_group = QGroupBox("Batch Processing")
+            batch_layout = QVBoxLayout()
+            self.batch_label = QLabel(f"Image {self.current_index + 1} of {len(self.original_images)}")
+            batch_layout.addWidget(self.batch_label)
+            batch_group.setLayout(batch_layout)
+            settings_layout.addWidget(batch_group)
         
         settings_layout.addStretch()
         return settings_layout
@@ -379,33 +397,104 @@ class MainWindow(QMainWindow):
             }
         """)
         
-    def load_images(self):
-        """Load original images"""
-        files, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Select Images",
-            "",
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
-        )
+    def ask_processing_mode(self):
+        """Ask user whether they want to process a single image or image pair"""
+        msg = QMessageBox()
+        msg.setWindowTitle("Processing Mode")
+        msg.setText("Please select the processing mode:")
+        msg.setIcon(QMessageBox.Question)
         
-        if files:
-            self.original_images = []
-            self.reference_images = []
-            self.target_images = []
-            self.results = []
-            self.current_index = 0
+        # Add buttons for both options
+        single_button = msg.addButton("Single Image (Needs Correction)", QMessageBox.ActionRole)
+        pair_button = msg.addButton("Two Images (Reference + Distorted)", QMessageBox.ActionRole)
+        msg.addButton(QMessageBox.Cancel)
+        
+        msg.exec_()
+        
+        if msg.clickedButton() == single_button:
+            return 'single'
+        elif msg.clickedButton() == pair_button:
+            return 'pair'
+        else:
+            return None
+        
+    def load_images(self):
+        """Load images based on selected processing mode"""
+        # Ask for processing mode
+        self.processing_mode = self.ask_processing_mode()
+        if self.processing_mode is None:
+            return
             
-            for file in files:
-                img = cv2.imread(file, cv2.IMREAD_GRAYSCALE)
-                if img is not None:
-                    img = cv2.resize(img, (256, 256))
-                    self.original_images.append(img)
-                    self.reference_images.append(img)
+        if self.processing_mode == 'single':
+            # Load single image that needs correction
+            files, _ = QFileDialog.getOpenFileNames(
+                self,
+                "Select Image to Process",
+                "",
+                "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
+            )
             
-            self.show_original_images()
-            self.distort_btn.setEnabled(True)
-            self.process_btn.setEnabled(False)
-            self.save_btn.setEnabled(False)
+            if files:
+                self.original_images = []
+                self.reference_images = []
+                self.target_images = []
+                self.results = []
+                self.current_index = 0
+                
+                for file in files:
+                    img = cv2.imread(file, cv2.IMREAD_GRAYSCALE)
+                    if img is not None:
+                        img = cv2.resize(img, (256, 256))
+                        self.original_images.append(img)  # Store original image
+                        self.reference_images.append(img.copy())  # Reference will be the original clean image
+                
+                self.show_original_images()
+                self.distort_btn.setEnabled(True)  # Enable distort button to create distorted version
+                self.process_btn.setEnabled(False)  # Disable process button until image is distorted
+                self.save_btn.setEnabled(False)
+                
+        else:  # pair mode
+            # First load reference image
+            ref_file, _ = QFileDialog.getOpenFileName(
+                self,
+                "Select Reference (Clean) Image",
+                "",
+                "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
+            )
+            
+            if ref_file:
+                # Then load distorted image
+                target_file, _ = QFileDialog.getOpenFileName(
+                    self,
+                    "Select Distorted Image",
+                    "",
+                    "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)"
+                )
+                
+                if target_file:
+                    self.original_images = []
+                    self.reference_images = []
+                    self.target_images = []
+                    self.results = []
+                    self.current_index = 0
+                    
+                    # Load reference image
+                    ref_img = cv2.imread(ref_file, cv2.IMREAD_GRAYSCALE)
+                    if ref_img is not None:
+                        ref_img = cv2.resize(ref_img, (256, 256))
+                        self.reference_images.append(ref_img)
+                        self.original_images.append(ref_img)
+                    
+                    # Load target (distorted) image
+                    target_img = cv2.imread(target_file, cv2.IMREAD_GRAYSCALE)
+                    if target_img is not None:
+                        target_img = cv2.resize(target_img, (256, 256))
+                        self.target_images.append(target_img)
+                    
+                    self.show_current_images()
+                    self.distort_btn.setEnabled(False)  # Disable distort button as we already have distorted image
+                    self.process_btn.setEnabled(True)
+                    self.save_btn.setEnabled(False)
             
     def show_original_images(self):
         """Display current original image"""
@@ -444,16 +533,16 @@ class MainWindow(QMainWindow):
         self.process_btn.setEnabled(True)
         
     def show_current_images(self):
-        """Display current reference and target images"""
+        """Display current reference and distorted images"""
         if not self.reference_images or not self.target_images:
             return
             
         # Create a side-by-side display
         ref_img = self.reference_images[self.current_index]
-        target_img = self.target_images[self.current_index]
+        distorted_img = self.target_images[self.current_index]
         
         # Create combined image
-        combined = np.hstack((ref_img, target_img))
+        combined = np.hstack((ref_img, distorted_img))
         
         # Convert to QPixmap and display
         height, width = combined.shape
@@ -575,64 +664,78 @@ class MainWindow(QMainWindow):
     def show_final_results(self, results):
         """Display final registration results"""
         plt.close('all')
-        fig = plt.figure(figsize=(12, 8))
+        # Increase figure size and add spacing between subplots
+        fig = plt.figure(figsize=(15, 10))
+        plt.subplots_adjust(wspace=0.3, hspace=0.3)
+        plt.suptitle('Results Summary', fontsize=14, fontweight='bold', y=0.95)
         
         # Reference Image
         plt.subplot(231)
         plt.imshow(self.reference_images[self.current_index], cmap='gray')
-        plt.title('Reference')
+        plt.title('Reference', fontsize=12, fontweight='bold', pad=10)
         plt.axis('off')
         
         # Distorted Image
         plt.subplot(232)
         plt.imshow(self.target_images[self.current_index], cmap='gray')
-        plt.title('Distorted')
+        plt.title('Distorted', fontsize=12, fontweight='bold', pad=10)
         plt.axis('off')
         
         # Registered Image
         plt.subplot(233)
         plt.imshow(results['final_image'], cmap='gray')
-        plt.title('Registered')
+        plt.title('Registered', fontsize=12, fontweight='bold', pad=10)
         plt.axis('off')
         
-        # Difference Map
+        # Difference Map with improved colormap
         plt.subplot(234)
-        plt.imshow(results['diff_map'], cmap='hot')
-        plt.title('Difference Map')
+        plt.imshow(results['diff_map'], cmap='jet')  # Changed to 'jet' for better visualization
+        plt.title('Difference Map', fontsize=12, fontweight='bold', pad=10)
+        plt.colorbar(label='Difference')
         plt.axis('off')
         
-        # Registration Quality
+        # Registration Quality with improved layout
         plt.subplot(235)
         metrics = results['metrics']
         quality_text = f"""Registration Quality
+
+Best Transformation Parameters:
+• Rotation: {metrics['parameters']['angle']:.2f}°
+• Translation X: {metrics['parameters']['tx']:.2f} px
+• Translation Y: {metrics['parameters']['ty']:.2f} px
+• Scaling: {metrics['parameters']['scale']:.2f}
+
+Metrics:
+• MSE: {metrics['mse']:.2f}
+  Lower values indicate better match
+
+• SSIM: {metrics['ssim']:.4f}
+  1.0 means perfect match
+
+• NCC: {metrics['ncc']:.4f}
+  1.0 means perfect match
+
+• MI: {metrics['mi']:.4f}
+  Higher values indicate better match"""
         
-        MSE: {metrics['mse']:.2f}
-        SSIM: {metrics['ssim']:.4f}
-        NCC: {metrics['ncc']:.4f}
-        MI: {metrics['mi']:.4f}
-        
-        Best Transformation Parameters:
-        Rotation: {metrics['parameters']['angle']:.2f}°
-        Translation X: {metrics['parameters']['tx']:.2f}
-        Translation Y: {metrics['parameters']['ty']:.2f}
-        Scaling: {metrics['parameters']['scale']:.2f}"""
-        
-        plt.text(0.1, 0.5, quality_text, fontsize=9, va='center')
+        plt.text(0.05, 0.95, quality_text, fontsize=10, va='top', 
+                transform=plt.gca().transAxes, linespacing=1.8,
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         plt.axis('off')
         
-        # PSO Convergence
+        # PSO Convergence with improved styling
         plt.subplot(236)
-        plt.plot(results.get('convergence', []), 'b-')
-        plt.title('PSO Convergence')
-        plt.xlabel('Iteration')
-        plt.ylabel('Fitness Score')
-        plt.grid(True)
+        plt.plot(results.get('convergence', []), 'b-', linewidth=2)
+        plt.title('PSO Convergence History', fontsize=12, fontweight='bold', pad=10)
+        plt.xlabel('Iteration', fontsize=10)
+        plt.ylabel('Fitness Score', fontsize=10)
+        plt.grid(True, linestyle='--', alpha=0.7)
         
         plt.tight_layout()
         
-        # Convert plot to image
+        # Convert plot to image with higher DPI
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=100, bbox_inches='tight')
+        plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
         plot_img = Image.open(buf)
         plot_array = np.array(plot_img)
@@ -643,6 +746,7 @@ class MainWindow(QMainWindow):
         q_img = QImage(plot_array.data, width, height, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(q_img)
         
+        # Scale pixmap to fit display while maintaining aspect ratio
         scaled_pixmap = pixmap.scaled(
             self.image_display.size(),
             Qt.KeepAspectRatio,
@@ -671,25 +775,25 @@ class MainWindow(QMainWindow):
                 # Reference Image
                 plt.subplot(231)
                 plt.imshow(self.reference_images[i], cmap='gray')
-                plt.title('Reference')
+                plt.title('Reference', fontsize=12, fontweight='bold')
                 plt.axis('off')
                 
                 # Distorted Image
                 plt.subplot(232)
                 plt.imshow(self.target_images[i], cmap='gray')
-                plt.title('Distorted')
+                plt.title('Distorted', fontsize=12, fontweight='bold')
                 plt.axis('off')
                 
                 # Registered Image
                 plt.subplot(233)
                 plt.imshow(result['final_image'], cmap='gray')
-                plt.title('Registered')
+                plt.title('Registered', fontsize=12, fontweight='bold')
                 plt.axis('off')
                 
                 # Difference Map
                 plt.subplot(234)
                 plt.imshow(result['diff_map'], cmap='hot')
-                plt.title('Difference Map')
+                plt.title('Difference Map', fontsize=12, fontweight='bold')
                 plt.axis('off')
                 
                 # Registration Quality
@@ -714,7 +818,7 @@ class MainWindow(QMainWindow):
                 # PSO Convergence
                 plt.subplot(236)
                 plt.plot(result.get('convergence', []), 'b-')
-                plt.title('PSO Convergence')
+                plt.title('PSO Convergence', fontsize=12, fontweight='bold')
                 plt.xlabel('Iteration')
                 plt.ylabel('Fitness Score')
                 plt.grid(True)
