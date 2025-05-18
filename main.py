@@ -1,20 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-"""
-Advanced Image Registration System with GUI
-----------------------------------------
-
-This application provides a professional graphical interface for image registration
-using Particle Swarm Optimization (PSO). It features:
-
-- Interactive image loading and visualization
-- Real-time registration progress
-- PDF report generation
-- Multi-image batch processing
-- Advanced visualization options
-"""
-
 import sys
 import os
 import cv2
@@ -35,8 +18,7 @@ import io
 from image_registration_pso import (
     transform_image, mse, ncc, mutual_information, compute_ssim, 
     post_process_image, distort_image, PSO, apply_nonlinear_distortion,
-    apply_local_distortion, apply_multiscale_distortion, apply_gaussian_noise,
-    apply_salt_pepper_noise, apply_noise_distortion
+    apply_local_distortion, apply_multiscale_distortion
 )
 
 class ImageRegistrationWorker(QThread):

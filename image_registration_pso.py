@@ -114,33 +114,6 @@ def apply_multiscale_distortion(image, scales=[0.5, 1.0, 2.0]):
     
     return result
 
-def apply_gaussian_noise(image, mean=0, sigma=25):
-    """Apply Gaussian noise to an image."""
-    row, col = image.shape
-    gauss = np.random.normal(mean, sigma, (row, col))
-    noisy = image + gauss
-    return np.clip(noisy, 0, 255).astype(np.uint8)
-
-def apply_salt_pepper_noise(image, prob=0.05):
-    """Apply salt and pepper noise to an image."""
-    noisy = np.copy(image)
-    # Salt noise
-    salt_mask = np.random.random(image.shape) < prob/2
-    noisy[salt_mask] = 255
-    # Pepper noise
-    pepper_mask = np.random.random(image.shape) < prob/2
-    noisy[pepper_mask] = 0
-    return noisy
-
-def apply_noise_distortion(image, noise_type='gaussian'):
-    """Apply noise-based distortion to an image."""
-    if noise_type == 'gaussian':
-        return apply_gaussian_noise(image)
-    elif noise_type == 'salt_pepper':
-        return apply_salt_pepper_noise(image)
-    else:
-        raise ValueError(f"Unknown noise type: {noise_type}")
-
 def distort_image(image, distortion_type='all'):
     """Apply geometric and nonlinear distortion to an image."""
     # 1. Apply geometric transformations

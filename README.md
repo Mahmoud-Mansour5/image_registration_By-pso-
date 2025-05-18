@@ -18,12 +18,17 @@ This project implements an advanced medical image registration system using Part
 
 ### 1. Image Distortion
 - **Purpose**: Create a distorted version of the original image to test the algorithm's matching capabilities
-- **Applied Transformations**:
-  - Random rotation: -45° to +45° degrees
-  - Horizontal translation: -30 to +30 pixels
-  - Vertical translation: -30 to +30 pixels
-  - Scaling: 0.8 to 1.2 of original size
-- **Implementation**: Using OpenCV's geometric transformation matrix
+- **Types of Distortions**:
+  - Geometric Transformations:
+    * Random rotation: -45° to +45° degrees
+    * Horizontal translation: -30 to +30 pixels
+    * Vertical translation: -30 to +30 pixels
+    * Scaling: 0.8 to 1.2 of original size
+  - Nonlinear Distortions:
+    * Wave distortion
+    * Local region distortion
+    * Multiscale distortion
+- **Implementation**: Using OpenCV's geometric transformation matrix and custom distortion maps
 
 ### 2. PSO Registration Algorithm
 - **Core Principle**: Simulates swarm behavior to search for optimal solution
@@ -42,23 +47,18 @@ This project implements an advanced medical image registration system using Part
 - **Fitness Function**:
   Combines multiple similarity metrics with weights optimized for medical images:
   ```python
-  fitness = 0.3 * MSE - 2.0 * SSIM - 1.0 * NCC - 1.5 * MI
+  fitness = (0.2 * mse_score -      # Reduced weight for MSE
+            1.5 * ssim_score -      # Increased weight for SSIM
+            1.0 * ncc_score -       # Maintained weight for NCC
+            1.5 * mi_score -        # Maintained weight for MI
+            2.0 * grad_similarity)  # High weight for gradient similarity
   ```
-  Where:
-  - MSE: Mean Squared Error (reduced weight due to sensitivity to intensity variations)
-  - SSIM: Structural Similarity Index (increased weight for better structural alignment)
-  - NCC: Normalized Cross-Correlation (maintained weight for robustness)
-  - MI: Mutual Information (increased weight for medical image effectiveness)
 
 - **Particle Updates**:
   - Dynamic update parameters:
     * w: Inertia weight (0.9 → 0.2)
     * c1: Cognitive coefficient (2.5 → 0.5)
     * c2: Social coefficient (0.5 → 2.5)
-
-- **Termination Criteria**:
-  - Maximum iterations reached (50 iterations)
-  - Or satisfactory matching achieved
 
 ### 3. Graphical User Interface (GUI)
 - **Key Functions**:
@@ -98,46 +98,6 @@ This project implements an advanced medical image registration system using Part
 - **Calculation**: Based on joint histogram analysis
 - **Range**: [0, ∞) where higher values indicate better match
 - **Advantage**: Effective for multi-modal image registration
-
-### 5. PSO Algorithm Details
-
-#### Initialization Phase
-```python
-for particle in range(n_particles):
-    if random() < 0.7:  # 70% narrow range
-        angle = uniform(-30, 30)
-        tx = uniform(-20, 20)
-        ty = uniform(-20, 20)
-        scale = uniform(0.8, 1.2)
-    else:  # 30% wide range
-        angle = uniform(-60, 60)
-        tx = uniform(-40, 40)
-        ty = uniform(-40, 40)
-        scale = uniform(0.6, 1.4)
-```
-
-#### Update Phase
-```python
-# Update velocity
-velocity = (w * velocity +
-           c1 * r1 * (p_best - current) +
-           c2 * r2 * (g_best - current))
-
-# Update position
-position += velocity
-
-# Dynamic parameter adjustment
-w = w_start - (w_start - w_end) * (iteration / max_iterations)
-c1 = c1_start - (c1_start - c1_end) * (iteration / max_iterations)
-c2 = c2_start + (c2_end - c2_start) * (iteration / max_iterations)
-```
-
-### 6. Implementation Benefits
-- **Robust Registration**: Combines multiple similarity metrics
-- **Adaptive Search**: Dynamic parameter adjustment
-- **Efficient Convergence**: Multi-range particle initialization
-- **Comprehensive Evaluation**: Multiple quality metrics
-- **User-Friendly**: Interactive GUI with real-time feedback
 
 ## Requirements
 
@@ -183,7 +143,7 @@ c2 = c2_start + (c2_end - c2_start) * (iteration / max_iterations)
 ### Image Loading and Processing
 - Supports common image formats (PNG, JPG, JPEG, BMP, TIF, TIFF)
 - Automatic image resizing for consistency
-- Random distortion generation for testing
+- Various distortion types for testing
 
 ### PSO Algorithm
 - Configurable number of particles and iterations
@@ -200,7 +160,7 @@ c2 = c2_start + (c2_end - c2_start) * (iteration / max_iterations)
 - Comprehensive results for each processed image
 - Quality metrics and transformation parameters
 - Visual comparisons and difference maps
-- Convergence history graph
+- Convergence history plot
 
 ## Contributing
 
