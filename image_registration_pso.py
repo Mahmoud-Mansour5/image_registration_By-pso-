@@ -142,8 +142,8 @@ def apply_noise_distortion(image, noise_type='gaussian'):
         raise ValueError(f"Unknown noise type: {noise_type}")
 
 def distort_image(image, distortion_type='all'):
-    """Apply all types of distortion to an image."""
-    # 1. First apply geometric transformations
+    """Apply geometric and nonlinear distortion to an image."""
+    # 1. Apply geometric transformations
     angle = np.random.uniform(-45, 45)
     tx = np.random.uniform(-30, 30)
     ty = np.random.uniform(-30, 30)
@@ -158,21 +158,7 @@ def distort_image(image, distortion_type='all'):
     
     distorted = cv2.warpAffine(image, M, (cols, rows), flags=cv2.INTER_LINEAR)
     
-    # 2. Apply Gaussian noise
-    sigma = np.random.uniform(5, 15)  # Reduced range for more subtle noise
-    gauss = np.random.normal(0, sigma, (rows, cols))
-    distorted = np.clip(distorted + gauss, 0, 255).astype(np.uint8)
-    
-    # 3. Apply salt & pepper noise
-    prob = np.random.uniform(0.01, 0.03)  # Reduced probability for more subtle noise
-    # Salt noise
-    salt_mask = np.random.random(image.shape) < prob/2
-    distorted[salt_mask] = 255
-    # Pepper noise
-    pepper_mask = np.random.random(image.shape) < prob/2
-    distorted[pepper_mask] = 0
-    
-    # 4. Apply nonlinear distortion
+    # 2. Apply nonlinear distortion
     map_x = np.zeros((rows, cols), dtype=np.float32)
     map_y = np.zeros((rows, cols), dtype=np.float32)
     
@@ -183,18 +169,14 @@ def distort_image(image, distortion_type='all'):
     
     distorted = cv2.remap(distorted, map_x, map_y, cv2.INTER_LINEAR)
     
-    # Store all the distortion parameters
+    # Store the distortion parameters
     true_params = {
-        'type': 'all',
+        'type': 'geometric_and_nonlinear',
         'geometric': {
             'angle': angle,
             'tx': tx,
             'ty': ty,
             'scale': scale
-        },
-        'noise': {
-            'gaussian_sigma': sigma,
-            'salt_pepper_prob': prob
         }
     }
     

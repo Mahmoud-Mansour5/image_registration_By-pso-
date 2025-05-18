@@ -30,39 +30,14 @@ from matplotlib.backends.backend_pdf import PdfPages
 from datetime import datetime
 from PIL import Image
 import io
-import random
 
-# Import the core PSO functionality
-from image_registration_pso import (transform_image, mse, ncc, 
-                                  mutual_information, compute_ssim, 
-                                  post_process_image, distort_image, PSO)
-
-def create_difference_map(img1, img2):
-    """Create a colored difference map between two images"""
-    diff = cv2.absdiff(img1, img2)
-    # Convert to grayscale if the difference is in color
-    if len(diff.shape) == 3:
-        diff = cv2.cvtColor(diff, cv2.COLOR_BGR2GRAY)
-    return diff
-
-def distort_image(image):
-    """Apply random distortion to an image"""
-    # Create random transformations
-    angle = random.uniform(-45, 45)     # Random rotation between -45 and 45 degrees
-    tx = random.uniform(-30, 30)        # Random X translation
-    ty = random.uniform(-30, 30)        # Random Y translation
-    scale = random.uniform(0.8, 1.2)    # Random scaling between 0.8x and 1.2x
-    
-    # Create transformation matrix
-    rows, cols = image.shape
-    center = (cols // 2, rows // 2)
-    M = cv2.getRotationMatrix2D(center, angle, scale)
-    M[0, 2] += tx
-    M[1, 2] += ty
-    
-    # Apply transformation
-    distorted = cv2.warpAffine(image, M, (cols, rows))
-    return distorted
+# Import all functionality from image_registration_pso
+from image_registration_pso import (
+    transform_image, mse, ncc, mutual_information, compute_ssim, 
+    post_process_image, distort_image, PSO, apply_nonlinear_distortion,
+    apply_local_distortion, apply_multiscale_distortion, apply_gaussian_noise,
+    apply_salt_pepper_noise, apply_noise_distortion
+)
 
 class ImageRegistrationWorker(QThread):
     """Worker thread for processing image registration"""
@@ -78,96 +53,48 @@ class ImageRegistrationWorker(QThread):
         
     def run(self):
         try:
-            # Initialize PSO parameters
-            n_particles = self.pso_params.get('n_particles', 100)
-            n_iterations = self.pso_params.get('n_iterations', 50)
-            w_start = self.pso_params.get('w_start', 0.9)
-            w_end = self.pso_params.get('w_end', 0.2)
-            c1_start = self.pso_params.get('c1_start', 2.5)
-            c1_end = self.pso_params.get('c1_end', 0.5)
-            c2_start = self.pso_params.get('c2_start', 0.5)
-            c2_end = self.pso_params.get('c2_end', 2.5)
-            
-            # Initialize particles
-            particles = []
-            for _ in range(n_particles):
-                if np.random.random() < 0.7:
-                    particles.append(np.array([
-                        np.random.uniform(-30, 30),
-                        np.random.uniform(-20, 20),
-                        np.random.uniform(-20, 20),
-                        np.random.uniform(0.8, 1.2)
-                    ]))
-                else:
-                    particles.append(np.array([
-                        np.random.uniform(-60, 60),
-                        np.random.uniform(-45, 45),
-                        np.random.uniform(-45, 45),
-                        np.random.uniform(0.6, 1.4)
-                    ]))
-            
-            velocities = [np.zeros(4) for _ in range(n_particles)]
-            p_best = particles[:]
-            p_best_scores = [float('inf')] * n_particles
-            g_best = None
-            g_best_score = float('inf')
-            
-            # Main PSO loop
-            convergence_history = []
-            
-            for it in range(n_iterations):
-                # Update progress
-                self.progress.emit(int((it + 1) * 100 / n_iterations))
+            # Create PSO instance with our parameters
+            pso = PSO(
+                self.reference_image,
+                self.target_image,
+                n_particles=self.pso_params.get('n_particles', 100),
+                n_iterations=self.pso_params.get('n_iterations', 50),
+                w_start=self.pso_params.get('w_start', 0.9),
+                w_end=self.pso_params.get('w_end', 0.2),
+                c1_start=self.pso_params.get('c1_start', 2.5),
+                c1_end=self.pso_params.get('c1_end', 0.5),
+                c2_start=self.pso_params.get('c2_start', 0.5),
+                c2_end=self.pso_params.get('c2_end', 2.5)
+            )
+
+            # Define callback for progress updates
+            def callback(iteration, g_best, g_best_score):
+                progress = int((iteration + 1) * 100 / self.pso_params.get('n_iterations', 50))
+                self.progress.emit(progress)
                 
-                # Dynamic parameter updates
-                progress = it / n_iterations
-                w = w_start - (w_start - w_end) * progress
-                c1 = c1_start - (c1_start - c1_end) * progress
-                c2 = c2_start + (c2_end - c2_start) * progress
-                
-                for i, p in enumerate(particles):
-                    # Apply transformation and calculate metrics
-                    angle, tx, ty, scale = p
-                    transformed = transform_image(self.target_image, angle, tx, ty, scale)
+                if iteration % 5 == 0:
+                    # Apply current best transformation
+                    transformed = transform_image(self.target_image, *g_best)
                     
+                    # Calculate metrics
                     ssim_score = compute_ssim(self.reference_image, transformed)
                     ncc_score = ncc(self.reference_image, transformed)
                     mse_score = mse(self.reference_image, transformed)
                     mi_score = mutual_information(self.reference_image, transformed)
                     
-                    # Calculate score
-                    score = (0.5 * mse_score - 1.5 * ssim_score - 
-                            1.0 * ncc_score - 0.8 * mi_score)
-                    
-                    if score < p_best_scores[i]:
-                        p_best_scores[i] = score
-                        p_best[i] = p.copy()
-                    
-                    if score < g_best_score:
-                        g_best_score = score
-                        g_best = p.copy()
-                        
-                        # Emit preview update
-                        if it % 5 == 0:
-                            self.update_preview.emit({
-                                'transformed': transformed,
-                                'metrics': {
-                                    'ssim': ssim_score,
-                                    'ncc': ncc_score,
-                                    'mse': mse_score,
-                                    'mi': mi_score
-                                }
-                            })
-                
-                convergence_history.append(g_best_score)
-                
-                # Update particles
-                for i in range(n_particles):
-                    r1, r2 = np.random.random(2)
-                    velocities[i] = (w * velocities[i] +
-                                   c1 * r1 * (p_best[i] - particles[i]) +
-                                   c2 * r2 * (g_best - particles[i]))
-                    particles[i] += velocities[i]
+                    # Emit preview update
+                    self.update_preview.emit({
+                        'transformed': transformed,
+                        'metrics': {
+                            'ssim': ssim_score,
+                            'ncc': ncc_score,
+                            'mse': mse_score,
+                            'mi': mi_score
+                        }
+                    })
+
+            # Run optimization
+            g_best, g_best_score, convergence_history = pso.optimize(callback=callback)
             
             # Generate final results
             final_img = transform_image(self.target_image, *g_best)
@@ -187,8 +114,8 @@ class ImageRegistrationWorker(QThread):
                 }
             }
             
-            # Create difference map
-            diff_map = create_difference_map(self.reference_image, final_img)
+            # Calculate difference map
+            diff_map = cv2.absdiff(self.reference_image, final_img)
             
             # Emit results
             self.finished.emit({
@@ -260,7 +187,7 @@ class MainWindow(QMainWindow):
         toolbar.addWidget(self.save_btn)
         
         layout.addLayout(toolbar)
-        
+
     def create_main_area(self, layout):
         """Create the main display area"""
         main_area = QHBoxLayout()
@@ -278,7 +205,7 @@ class MainWindow(QMainWindow):
         main_area.addLayout(settings_panel, stretch=1)
         
         layout.addLayout(main_area)
-        
+
     def create_settings_panel(self):
         """Create the settings panel"""
         settings_layout = QVBoxLayout()
@@ -287,18 +214,18 @@ class MainWindow(QMainWindow):
         pso_group = QGroupBox("PSO Parameters")
         pso_layout = QGridLayout()
         
-        # Add parameter controls with wider ranges
+        # Add parameter controls
         self.n_particles = QSpinBox()
-        self.n_particles.setRange(10, 500)  # Increased range
+        self.n_particles.setRange(10, 500)
         self.n_particles.setValue(100)
-        self.n_particles.setToolTip("Number of particles (solutions) to use in optimization.\nMore particles = better accuracy but slower processing")
+        self.n_particles.setToolTip("Number of particles (solutions) to use in optimization")
         pso_layout.addWidget(QLabel("Particles:"), 0, 0)
         pso_layout.addWidget(self.n_particles, 0, 1)
         
         self.n_iterations = QSpinBox()
-        self.n_iterations.setRange(10, 200)  # Increased range
+        self.n_iterations.setRange(10, 200)
         self.n_iterations.setValue(50)
-        self.n_iterations.setToolTip("Number of iterations for optimization.\nMore iterations = better results but longer processing time")
+        self.n_iterations.setToolTip("Number of iterations for optimization")
         pso_layout.addWidget(QLabel("Iterations:"), 1, 0)
         pso_layout.addWidget(self.n_iterations, 1, 1)
         
@@ -330,26 +257,11 @@ class MainWindow(QMainWindow):
             'mi': QLabel("MI: -")
         }
         
-        # Add tooltips for metrics
-        self.metrics_labels['ssim'].setToolTip("Structural Similarity Index\n1.0 means perfect match")
-        self.metrics_labels['ncc'].setToolTip("Normalized Cross-Correlation\n1.0 means perfect match")
-        self.metrics_labels['mse'].setToolTip("Mean Squared Error\nLower values indicate better match")
-        self.metrics_labels['mi'].setToolTip("Mutual Information\nHigher values indicate better match")
-        
         for label in self.metrics_labels.values():
             metrics_layout.addWidget(label)
             
         metrics_group.setLayout(metrics_layout)
         settings_layout.addWidget(metrics_group)
-        
-        # Batch Processing Status
-        if len(self.original_images) > 1:
-            batch_group = QGroupBox("Batch Processing")
-            batch_layout = QVBoxLayout()
-            self.batch_label = QLabel(f"Image {self.current_index + 1} of {len(self.original_images)}")
-            batch_layout.addWidget(self.batch_label)
-            batch_group.setLayout(batch_layout)
-            settings_layout.addWidget(batch_group)
         
         settings_layout.addStretch()
         return settings_layout
@@ -404,7 +316,6 @@ class MainWindow(QMainWindow):
         msg.setText("Please select the processing mode:")
         msg.setIcon(QMessageBox.Question)
         
-        # Add buttons for both options
         single_button = msg.addButton("Single Image (Needs Correction)", QMessageBox.ActionRole)
         pair_button = msg.addButton("Two Images (Reference + Distorted)", QMessageBox.ActionRole)
         msg.addButton(QMessageBox.Cancel)
@@ -420,13 +331,11 @@ class MainWindow(QMainWindow):
         
     def load_images(self):
         """Load images based on selected processing mode"""
-        # Ask for processing mode
         self.processing_mode = self.ask_processing_mode()
         if self.processing_mode is None:
             return
             
         if self.processing_mode == 'single':
-            # Load single image that needs correction
             files, _ = QFileDialog.getOpenFileNames(
                 self,
                 "Select Image to Process",
@@ -445,16 +354,15 @@ class MainWindow(QMainWindow):
                     img = cv2.imread(file, cv2.IMREAD_GRAYSCALE)
                     if img is not None:
                         img = cv2.resize(img, (256, 256))
-                        self.original_images.append(img)  # Store original image
-                        self.reference_images.append(img.copy())  # Reference will be the original clean image
+                        self.original_images.append(img)
+                        self.reference_images.append(img.copy())
                 
                 self.show_original_images()
-                self.distort_btn.setEnabled(True)  # Enable distort button to create distorted version
-                self.process_btn.setEnabled(False)  # Disable process button until image is distorted
+                self.distort_btn.setEnabled(True)
+                self.process_btn.setEnabled(False)
                 self.save_btn.setEnabled(False)
                 
         else:  # pair mode
-            # First load reference image
             ref_file, _ = QFileDialog.getOpenFileName(
                 self,
                 "Select Reference (Clean) Image",
@@ -463,7 +371,6 @@ class MainWindow(QMainWindow):
             )
             
             if ref_file:
-                # Then load distorted image
                 target_file, _ = QFileDialog.getOpenFileName(
                     self,
                     "Select Distorted Image",
@@ -478,21 +385,19 @@ class MainWindow(QMainWindow):
                     self.results = []
                     self.current_index = 0
                     
-                    # Load reference image
                     ref_img = cv2.imread(ref_file, cv2.IMREAD_GRAYSCALE)
                     if ref_img is not None:
                         ref_img = cv2.resize(ref_img, (256, 256))
                         self.reference_images.append(ref_img)
                         self.original_images.append(ref_img)
                     
-                    # Load target (distorted) image
                     target_img = cv2.imread(target_file, cv2.IMREAD_GRAYSCALE)
                     if target_img is not None:
                         target_img = cv2.resize(target_img, (256, 256))
                         self.target_images.append(target_img)
                     
                     self.show_current_images()
-                    self.distort_btn.setEnabled(False)  # Disable distort button as we already have distorted image
+                    self.distort_btn.setEnabled(False)
                     self.process_btn.setEnabled(True)
                     self.save_btn.setEnabled(False)
             
@@ -501,16 +406,13 @@ class MainWindow(QMainWindow):
         if not self.original_images:
             return
             
-        # Show the current original image
         current_img = self.original_images[self.current_index]
         
-        # Convert to QPixmap and display
         height, width = current_img.shape
         bytes_per_line = width
         q_img = QImage(current_img.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_img)
         
-        # Scale pixmap to fit display while maintaining aspect ratio
         scaled_pixmap = pixmap.scaled(
             self.image_display.size(),
             Qt.KeepAspectRatio,
@@ -526,7 +428,8 @@ class MainWindow(QMainWindow):
             
         self.target_images = []
         for img in self.original_images:
-            distorted = distort_image(img)
+            # Using distort_image from image_registration_pso.py
+            distorted, _ = distort_image(img)
             self.target_images.append(distorted)
             
         self.show_current_images()
@@ -537,20 +440,16 @@ class MainWindow(QMainWindow):
         if not self.reference_images or not self.target_images:
             return
             
-        # Create a side-by-side display
         ref_img = self.reference_images[self.current_index]
         distorted_img = self.target_images[self.current_index]
         
-        # Create combined image
         combined = np.hstack((ref_img, distorted_img))
         
-        # Convert to QPixmap and display
         height, width = combined.shape
         bytes_per_line = width
         q_img = QImage(combined.data, width, height, bytes_per_line, QImage.Format_Grayscale8)
         pixmap = QPixmap.fromImage(q_img)
         
-        # Scale pixmap to fit display while maintaining aspect ratio
         scaled_pixmap = pixmap.scaled(
             self.image_display.size(),
             Qt.KeepAspectRatio,
@@ -564,7 +463,6 @@ class MainWindow(QMainWindow):
         if not self.reference_images or not self.target_images:
             return
             
-        # Get PSO parameters
         pso_params = {
             'n_particles': self.n_particles.value(),
             'n_iterations': self.n_iterations.value(),
@@ -576,7 +474,6 @@ class MainWindow(QMainWindow):
             'c2_end': 2.5
         }
         
-        # Create and start worker thread
         self.worker = ImageRegistrationWorker(
             self.reference_images[self.current_index],
             self.target_images[self.current_index],
@@ -587,12 +484,10 @@ class MainWindow(QMainWindow):
         self.worker.finished.connect(self.process_complete)
         self.worker.update_preview.connect(self.update_preview)
         
-        # Disable controls
         self.process_btn.setEnabled(False)
         self.progress_bar.setValue(0)
         self.status_label.setText("Processing...")
         
-        # Start processing
         self.worker.start()
         
     def update_progress(self, value):
@@ -601,14 +496,12 @@ class MainWindow(QMainWindow):
         
     def update_preview(self, data):
         """Update preview and metrics during processing"""
-        # Update metrics
         metrics = data['metrics']
         self.metrics_labels['ssim'].setText(f"SSIM: {metrics['ssim']:.4f}")
         self.metrics_labels['ncc'].setText(f"NCC: {metrics['ncc']:.4f}")
         self.metrics_labels['mse'].setText(f"MSE: {metrics['mse']:.2f}")
         self.metrics_labels['mi'].setText(f"MI: {metrics['mi']:.4f}")
         
-        # Update preview image
         transformed = data['transformed']
         ref_img = self.reference_images[self.current_index]
         combined = np.hstack((ref_img, transformed))
@@ -636,20 +529,12 @@ class MainWindow(QMainWindow):
             )
             return
             
-        # Store results
         self.results.append(results)
-        
-        # Enable controls
         self.process_btn.setEnabled(True)
         self.save_btn.setEnabled(True)
-        
-        # Update status
         self.status_label.setText("Registration complete")
-        
-        # Show final results
         self.show_final_results(results)
         
-        # Move to next image if available
         self.current_index += 1
         if self.current_index < len(self.reference_images):
             self.show_current_images()
@@ -664,7 +549,6 @@ class MainWindow(QMainWindow):
     def show_final_results(self, results):
         """Display final registration results"""
         plt.close('all')
-        # Increase figure size and add spacing between subplots
         fig = plt.figure(figsize=(15, 10))
         plt.subplots_adjust(wspace=0.3, hspace=0.3)
         plt.suptitle('Results Summary', fontsize=14, fontweight='bold', y=0.95)
@@ -687,14 +571,14 @@ class MainWindow(QMainWindow):
         plt.title('Registered', fontsize=12, fontweight='bold', pad=10)
         plt.axis('off')
         
-        # Difference Map with improved colormap
+        # Difference Map
         plt.subplot(234)
-        plt.imshow(results['diff_map'], cmap='jet')  # Changed to 'jet' for better visualization
+        plt.imshow(results['diff_map'], cmap='jet')
         plt.title('Difference Map', fontsize=12, fontweight='bold', pad=10)
         plt.colorbar(label='Difference')
         plt.axis('off')
         
-        # Registration Quality with improved layout
+        # Registration Quality
         plt.subplot(235)
         metrics = results['metrics']
         quality_text = f"""Registration Quality
@@ -723,7 +607,7 @@ Metrics:
                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'))
         plt.axis('off')
         
-        # PSO Convergence with improved styling
+        # PSO Convergence
         plt.subplot(236)
         plt.plot(results.get('convergence', []), 'b-', linewidth=2)
         plt.title('PSO Convergence History', fontsize=12, fontweight='bold', pad=10)
@@ -733,20 +617,17 @@ Metrics:
         
         plt.tight_layout()
         
-        # Convert plot to image with higher DPI
         buf = io.BytesIO()
         plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
         buf.seek(0)
         plot_img = Image.open(buf)
         plot_array = np.array(plot_img)
         
-        # Convert to QPixmap and display
         height, width, channel = plot_array.shape
         bytes_per_line = 3 * width
         q_img = QImage(plot_array.data, width, height, bytes_per_line, QImage.Format_RGB888)
         pixmap = QPixmap.fromImage(q_img)
         
-        # Scale pixmap to fit display while maintaining aspect ratio
         scaled_pixmap = pixmap.scaled(
             self.image_display.size(),
             Qt.KeepAspectRatio,
@@ -761,10 +642,7 @@ Metrics:
         if not self.results:
             return
             
-        # Create results directory if it doesn't exist
         os.makedirs("results", exist_ok=True)
-        
-        # Generate filename with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"results/registration_report_{timestamp}.pdf"
         
