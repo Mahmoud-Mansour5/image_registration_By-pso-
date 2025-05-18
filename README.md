@@ -19,9 +19,9 @@ This project implements an advanced medical image registration system using Part
 ### 1. Image Distortion
 - **Purpose**: Create a distorted version of the original image to test the algorithm's matching capabilities
 - **Applied Transformations**:
-  - Random rotation: -30 to +30 degrees
-  - Horizontal translation: -20 to +20 pixels
-  - Vertical translation: -20 to +20 pixels
+  - Random rotation: -45° to +45° degrees
+  - Horizontal translation: -30 to +30 pixels
+  - Vertical translation: -30 to +30 pixels
   - Scaling: 0.8 to 1.2 of original size
 - **Implementation**: Using OpenCV's geometric transformation matrix
 
@@ -33,25 +33,26 @@ This project implements an advanced medical image registration system using Part
   ```
 
 - **Swarm Initialization**:
-  - Number of particles: 30 (configurable)
-  - Initial search ranges:
-    * 70% of particles: narrow range (±30° rotation, ±20 translation)
-    * 30% of particles: wide range (±60° rotation, ±40 translation)
+  - Number of particles: 100 (configurable)
+  - Multi-range initialization strategy:
+    * 60% particles: narrow range (±30° rotation, ±20 translation, 0.9-1.1 scale)
+    * 30% particles: medium range (±45° rotation, ±30 translation, 0.8-1.2 scale)
+    * 10% particles: wide range (±60° rotation, ±40 translation, 0.7-1.3 scale)
 
 - **Fitness Function**:
-  Combines multiple similarity metrics:
+  Combines multiple similarity metrics with weights optimized for medical images:
   ```python
-  fitness = 0.5 * MSE - 1.5 * SSIM - 1.0 * NCC - 0.8 * MI
+  fitness = 0.3 * MSE - 2.0 * SSIM - 1.0 * NCC - 1.5 * MI
   ```
   Where:
-  - MSE: Mean Squared Error (to be minimized)
-  - SSIM: Structural Similarity Index (to be maximized)
-  - NCC: Normalized Cross-Correlation (to be maximized)
-  - MI: Mutual Information (to be maximized)
+  - MSE: Mean Squared Error (reduced weight due to sensitivity to intensity variations)
+  - SSIM: Structural Similarity Index (increased weight for better structural alignment)
+  - NCC: Normalized Cross-Correlation (maintained weight for robustness)
+  - MI: Mutual Information (increased weight for medical image effectiveness)
 
 - **Particle Updates**:
   - Dynamic update parameters:
-    * w: Inertia weight (0.9 → 0.4)
+    * w: Inertia weight (0.9 → 0.2)
     * c1: Cognitive coefficient (2.5 → 0.5)
     * c2: Social coefficient (0.5 → 2.5)
 

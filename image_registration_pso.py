@@ -57,39 +57,152 @@ def post_process_image(image):
     image = np.clip(image, 0, 255)
     return image.astype(np.uint8)
 
-def distort_image(image):
-    """Apply random distortion to an image for testing."""
-    # Create random transformations within reasonable ranges
-    angle = np.random.uniform(-30, 30)      # Random rotation between -30 and 30 degrees
-    tx = np.random.uniform(-20, 20)         # Random X translation
-    ty = np.random.uniform(-20, 20)         # Random Y translation
-    scale = np.random.uniform(0.8, 1.2)     # Random scaling between 0.8x and 1.2x
+def apply_nonlinear_distortion(image, strength=0.3):
+    """Apply simple nonlinear distortion to an image."""
+    rows, cols = image.shape
+    map_x = np.zeros((rows, cols), dtype=np.float32)
+    map_y = np.zeros((rows, cols), dtype=np.float32)
     
-    # Apply transformation
+    # Create distortion maps
+    for i in range(rows):
+        for j in range(cols):
+            map_x[i, j] = j + strength * np.sin(i/30.0)
+            map_y[i, j] = i + strength * np.cos(j/30.0)
+    
+    # Apply distortion
+    return cv2.remap(image, map_x, map_y, cv2.INTER_LINEAR)
+
+def apply_local_distortion(image, center, radius, strength):
+    """Apply local distortion in a specific region."""
+    rows, cols = image.shape
+    map_x = np.zeros((rows, cols), dtype=np.float32)
+    map_y = np.zeros((rows, cols), dtype=np.float32)
+    
+    # Create coordinate maps
+    for i in range(rows):
+        for j in range(cols):
+            # Calculate distance from center
+            dx = j - center[0]
+            dy = i - center[1]
+            distance = np.sqrt(dx**2 + dy**2)
+            
+            # Apply distortion based on distance
+            if distance < radius:
+                factor = (1 - distance/radius) * strength
+                map_x[i, j] = j + dx * factor
+                map_y[i, j] = i + dy * factor
+            else:
+                map_x[i, j] = j
+                map_y[i, j] = i
+    
+    # Apply distortion
+    return cv2.remap(image, map_x, map_y, cv2.INTER_LINEAR)
+
+def apply_multiscale_distortion(image, scales=[0.5, 1.0, 2.0]):
+    """Apply distortions at multiple scales."""
+    result = image.copy()
+    
+    for scale in scales:
+        # Resize image to current scale
+        scaled = cv2.resize(result, None, fx=scale, fy=scale)
+        
+        # Apply basic distortion at this scale
+        distorted, _ = distort_image(scaled)
+        
+        # Resize back to original size
+        result = cv2.resize(distorted, (image.shape[1], image.shape[0]))
+    
+    return result
+
+def apply_gaussian_noise(image, mean=0, sigma=25):
+    """Apply Gaussian noise to an image."""
+    row, col = image.shape
+    gauss = np.random.normal(mean, sigma, (row, col))
+    noisy = image + gauss
+    return np.clip(noisy, 0, 255).astype(np.uint8)
+
+def apply_salt_pepper_noise(image, prob=0.05):
+    """Apply salt and pepper noise to an image."""
+    noisy = np.copy(image)
+    # Salt noise
+    salt_mask = np.random.random(image.shape) < prob/2
+    noisy[salt_mask] = 255
+    # Pepper noise
+    pepper_mask = np.random.random(image.shape) < prob/2
+    noisy[pepper_mask] = 0
+    return noisy
+
+def apply_noise_distortion(image, noise_type='gaussian'):
+    """Apply noise-based distortion to an image."""
+    if noise_type == 'gaussian':
+        return apply_gaussian_noise(image)
+    elif noise_type == 'salt_pepper':
+        return apply_salt_pepper_noise(image)
+    else:
+        raise ValueError(f"Unknown noise type: {noise_type}")
+
+def distort_image(image, distortion_type='all'):
+    """Apply all types of distortion to an image."""
+    # 1. First apply geometric transformations
+    angle = np.random.uniform(-45, 45)
+    tx = np.random.uniform(-30, 30)
+    ty = np.random.uniform(-30, 30)
+    scale = np.random.uniform(0.8, 1.2)
+    
     rows, cols = image.shape
     center = (cols // 2, rows // 2)
     
-    # Create transformation matrix
     M = cv2.getRotationMatrix2D(center, angle, scale)
     M[0, 2] += tx
     M[1, 2] += ty
     
-    # Apply transformation
     distorted = cv2.warpAffine(image, M, (cols, rows), flags=cv2.INTER_LINEAR)
     
-    # Store the actual transformation parameters for reference
+    # 2. Apply Gaussian noise
+    sigma = np.random.uniform(5, 15)  # Reduced range for more subtle noise
+    gauss = np.random.normal(0, sigma, (rows, cols))
+    distorted = np.clip(distorted + gauss, 0, 255).astype(np.uint8)
+    
+    # 3. Apply salt & pepper noise
+    prob = np.random.uniform(0.01, 0.03)  # Reduced probability for more subtle noise
+    # Salt noise
+    salt_mask = np.random.random(image.shape) < prob/2
+    distorted[salt_mask] = 255
+    # Pepper noise
+    pepper_mask = np.random.random(image.shape) < prob/2
+    distorted[pepper_mask] = 0
+    
+    # 4. Apply nonlinear distortion
+    map_x = np.zeros((rows, cols), dtype=np.float32)
+    map_y = np.zeros((rows, cols), dtype=np.float32)
+    
+    for i in range(rows):
+        for j in range(cols):
+            map_x[i, j] = j + 3.0 * np.sin(i/30.0)  # Subtle wave distortion
+            map_y[i, j] = i + 3.0 * np.cos(j/30.0)
+    
+    distorted = cv2.remap(distorted, map_x, map_y, cv2.INTER_LINEAR)
+    
+    # Store all the distortion parameters
     true_params = {
-        'angle': angle,
-        'tx': tx,
-        'ty': ty,
-        'scale': scale
+        'type': 'all',
+        'geometric': {
+            'angle': angle,
+            'tx': tx,
+            'ty': ty,
+            'scale': scale
+        },
+        'noise': {
+            'gaussian_sigma': sigma,
+            'salt_pepper_prob': prob
+        }
     }
     
     return distorted, true_params
 
 class PSO:
-    def __init__(self, reference_image, target_image, n_particles=30, n_iterations=50,
-                 w_start=0.9, w_end=0.4, c1_start=2.5, c1_end=0.5, c2_start=0.5, c2_end=2.5):
+    def __init__(self, reference_image, target_image, n_particles=100, n_iterations=50,
+                 w_start=0.9, w_end=0.2, c1_start=2.5, c1_end=0.5, c2_start=0.5, c2_end=2.5):
         """Initialize PSO for image registration."""
         self.reference = reference_image
         self.target = target_image
@@ -104,7 +217,7 @@ class PSO:
         self.c2_start = c2_start
         self.c2_end = c2_end
         
-        # Initialize particles
+        # Initialize particles with improved distribution
         self.particles = self._initialize_particles()
         self.velocities = [np.zeros(4) for _ in range(n_particles)]
         self.p_best = self.particles.copy()
@@ -116,30 +229,50 @@ class PSO:
         self.convergence_history = []
         
     def _initialize_particles(self):
-        """Initialize particles with random positions."""
+        """Initialize particles with improved distribution strategy."""
         particles = []
-        for _ in range(self.n_particles):
-            if np.random.random() < 0.7:
-                # Normal initialization range
-                particle = np.array([
-                    np.random.uniform(-30, 30),    # angle
-                    np.random.uniform(-20, 20),    # tx
-                    np.random.uniform(-20, 20),    # ty
-                    np.random.uniform(0.8, 1.2)    # scale
-                ])
-            else:
-                # Wider initialization range for some particles
-                particle = np.array([
-                    np.random.uniform(-60, 60),    # angle
-                    np.random.uniform(-40, 40),    # tx
-                    np.random.uniform(-40, 40),    # ty
-                    np.random.uniform(0.6, 1.4)    # scale
-                ])
+        
+        # Calculate number of particles for each initialization strategy
+        n_narrow = int(0.6 * self.n_particles)  # 60% narrow range
+        n_medium = int(0.3 * self.n_particles)  # 30% medium range
+        n_wide = self.n_particles - n_narrow - n_medium  # 10% wide range
+        
+        # Narrow range initialization (focused search)
+        for _ in range(n_narrow):
+            particle = np.array([
+                np.random.uniform(-30, 30),    # angle
+                np.random.uniform(-20, 20),    # tx
+                np.random.uniform(-20, 20),    # ty
+                np.random.uniform(0.9, 1.1)    # scale
+            ])
             particles.append(particle)
+        
+        # Medium range initialization
+        for _ in range(n_medium):
+            particle = np.array([
+                np.random.uniform(-45, 45),    # angle
+                np.random.uniform(-30, 30),    # tx
+                np.random.uniform(-30, 30),    # ty
+                np.random.uniform(0.8, 1.2)    # scale
+            ])
+            particles.append(particle)
+        
+        # Wide range initialization (exploration)
+        for _ in range(n_wide):
+            particle = np.array([
+                np.random.uniform(-60, 60),    # angle
+                np.random.uniform(-40, 40),    # tx
+                np.random.uniform(-40, 40),    # ty
+                np.random.uniform(0.7, 1.3)    # scale
+            ])
+            particles.append(particle)
+        
+        # Shuffle particles to mix different ranges
+        np.random.shuffle(particles)
         return particles
     
     def _evaluate_fitness(self, particle):
-        """Evaluate the fitness of a particle."""
+        """Evaluate the fitness of a particle with improved weights for medical images."""
         transformed = transform_image(self.target, *particle)
         
         # Calculate multiple similarity metrics
@@ -148,10 +281,25 @@ class PSO:
         mse_score = mse(self.reference, transformed)
         mi_score = mutual_information(self.reference, transformed)
         
-        # Combined fitness score (weighted sum of metrics)
-        # Note: We want to minimize MSE and maximize others
-        fitness = (0.5 * mse_score - 1.5 * ssim_score - 
-                  1.0 * ncc_score - 0.8 * mi_score)
+        # Calculate gradient-based similarity (more robust to noise)
+        ref_grad_x = cv2.Sobel(self.reference, cv2.CV_64F, 1, 0, ksize=3)
+        ref_grad_y = cv2.Sobel(self.reference, cv2.CV_64F, 0, 1, ksize=3)
+        trans_grad_x = cv2.Sobel(transformed, cv2.CV_64F, 1, 0, ksize=3)
+        trans_grad_y = cv2.Sobel(transformed, cv2.CV_64F, 0, 1, ksize=3)
+        
+        # Calculate gradient similarity
+        grad_similarity = (np.mean(np.abs(ref_grad_x - trans_grad_x)) + 
+                          np.mean(np.abs(ref_grad_y - trans_grad_y))) / 2.0
+        
+        # Normalize gradient similarity to [0,1] range
+        grad_similarity = 1.0 / (1.0 + grad_similarity)
+        
+        # Combined fitness score with adjusted weights for noisy medical images
+        fitness = (0.2 * mse_score -      # Reduced weight for MSE (sensitive to noise)
+                  1.5 * ssim_score -      # Reduced weight for SSIM
+                  1.0 * ncc_score -       # Maintained weight for NCC
+                  1.5 * mi_score -        # Maintained weight for MI
+                  2.0 * grad_similarity)  # High weight for gradient similarity
         
         return fitness
     
